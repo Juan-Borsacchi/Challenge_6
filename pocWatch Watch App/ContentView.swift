@@ -55,10 +55,17 @@ struct Decibel: View {
             
             if let amostra = amostras.first {
                 let valor = amostra.quantity.doubleValue(for: .decibelAWeightedSoundPressureLevel())
+                let valorFormatado = valor.formatted(.number.precision(.fractionLength(1)))
+                let dataFormatada = amostra.endDate.formatted()
+                
+                texto = "\(valorFormatado) dB(A) em \(dataFormatada)"
+                
                 print("Exposição sonora: \(valor) dB(A)")
                 print("Data da medição: \(amostra.endDate)")
                 print("Medição: \(amostra.endDate.formatted())")
                 print("Agora: \(Date().formatted())")
+            } else {
+                texto = "Nenhuma amostra disponível"
             }
             
         } catch {
@@ -70,6 +77,7 @@ struct Decibel: View {
 struct Agua: View {
     @State var texto: String = "Toque para consultar"
     @State var healthStore = HKHealthStore()
+    
     var body: some View {
         VStack {
             Text(texto)
@@ -102,11 +110,19 @@ struct Agua: View {
             let amostraAgua = HKQuantitySample(type: tipoAgua, quantity: quantidade, start: agora, end: agora, metadata: [HKMetadataKeyWasUserEntered: true])
             
             try await healthStore.save(amostraAgua)
-            print("Água registrada: 200ml")
+            
+            texto = "Você registrou 250ml"
+            print("Água registrada: 250ml")
             
         } catch {
             print("Falha ao solicitar autorização: \(error)")
         }
+    }
+}
+
+struct Coracao: View {
+    var body: some View {
+        
     }
 }
 
