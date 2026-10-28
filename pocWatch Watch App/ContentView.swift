@@ -85,15 +85,24 @@ struct Agua: View {
         }
         .padding()
     }
+    
     private func registrar() async {
         guard HKHealthStore.isHealthDataAvailable() else {
             return print("Falha ao acessar o healthKit")
         }
+        
         let tipoAgua = HKQuantityType(.dietaryWater)
         
         do {
             
             try await healthStore.requestAuthorization(toShare: [tipoAgua], read: [])
+            let quantidade = HKQuantity(unit: .literUnit(with: .milli), doubleValue: 250)
+            
+            let agora = Date()
+            let amostraAgua = HKQuantitySample(type: tipoAgua, quantity: quantidade, start: agora, end: agora, metadata: [HKMetadataKeyWasUserEntered: true])
+            
+            try await healthStore.save(amostraAgua)
+            print("Água registrada: 200ml")
             
         } catch {
             print("Falha ao solicitar autorização: \(error)")
