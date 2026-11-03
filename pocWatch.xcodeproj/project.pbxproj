@@ -308,8 +308,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "pocWatch-Watch-App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = pocWatch;
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Queremos consultar sua ultima medição sonora";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Registrar a quantidade de água informada";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Consultar exposição sonora, batimentos e energia ativa durante sua caminhada.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Registrar a água informada e salvar suas caminhadas no Saúde.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKWatchOnly = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -345,8 +345,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "pocWatch-Watch-App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = pocWatch;
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Queremos consultar sua ultima medição sonora";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Registrar a quantidade de água informada";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Consultar exposição sonora, batimentos e energia ativa durante sua caminhada.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Registrar a água informada e salvar suas caminhadas no Saúde.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKWatchOnly = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
