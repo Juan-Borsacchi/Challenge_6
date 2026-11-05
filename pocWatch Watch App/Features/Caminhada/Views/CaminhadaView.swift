@@ -6,8 +6,10 @@ struct CaminhadaView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                Label("Caminhada", systemImage: "figure.walk")
-                    .foregroundStyle(.green)
+                if treino.estado == .pronto {
+                    Label("Caminhada", systemImage: "figure.walk")
+                        .foregroundStyle(.green)
+                }
 
                 switch treino.estado {
                 case .pronto:
@@ -21,94 +23,10 @@ struct CaminhadaView: View {
                     .tint(.green)
 
                 case .caminhando:
-                    VStack {
-                        HStack {
-                            Image(systemName: "heart.fill")
-                                .foregroundStyle(.pink)
-                            
-                            if let bpm = treino.bpm {
-                                Text("\(bpm) BPM")
-                                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                                    .monospacedDigit()
-                            } else {
-                                Text("Aguardando leitura…")
-                                    .font(.caption)
-                            }
-                        }
-                        .padding()
-                        .background(.quinary, in: RoundedRectangle(cornerRadius: 20))
-                        
-                        Text(treino.inicio, style: .timer)
-                            .font(.title2)
-                            .monospacedDigit()
-                        HStack(spacing: 8) {
-                            if treino.estado != .pronto {
-                                Label {
-                                    if let passos = treino.passos {
-                                        Text("\(passos) passos")
-                                    } else {
-                                        Text(treino.erroPassos == nil ? "0 passos" : "Passos indisponíveis")
-                                    }
-                                } icon: {
-                                    Image(systemName: "shoeprints.fill")
-                                }
-                                .font(.caption2)
-                                .foregroundStyle(.green)
-                                
-                            }
-                            
-                            if let calorias = treino.calorias {
-                                Label("\(Int(calorias)) kcal", systemImage: "flame.fill")
-                                    .font(.caption2)
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-                        .padding()
-                        .background(.quinary, in: RoundedRectangle(cornerRadius: 20))
-                        .padding()
-                        
-                        Button("Encerrar", role: .destructive) {
-                            treino.encerrar()
-                        }
-                        .tint(.red)
-                    }
+                    CaminhandoView(inicio: treino.inicio,bpm: treino.bpm,passos: treino.passos,calorias: treino.calorias,elevacaoMaxima: treino.altitudeInicial == nil || treino.erroAltitude != nil ? nil : treino.elevacaoMaxima,encerrar: { treino.encerrar() })
 
                 case .resumo, .salvo:
-                    Text(treino.estado == .salvo ? "Treino salvo!" : "Resumo")
-                        .font(.headline)
-                    Text("Duração: \(treino.tempoFormatado)")
-
-                    if let media = treino.bpmMedio {
-                        Text("Média: \(media) BPM")
-                            .foregroundStyle(.pink)
-                    }
-                    if let passos = treino.passos {
-                        Text("\(passos) passos")
-                    } else {
-                        Text(treino.erroPassos == nil ? "0 passos" : "Passos indisponíveis")
-                    }
-                    
-                    if let caloria = treino.calorias {
-                        Text("\(Int(caloria)) kcal")
-                    } else {
-                        Text(treino.erroPassos == nil ? "0 kcal" : "Calorias indisponíveis")
-                    }
-                    
-
-                    if treino.estado == .resumo {
-                        Button("Salvar no Saúde") {
-                            Task { await treino.salvar() }
-                        }
-                        .tint(.green)
-
-                        Button("Descartar", role: .destructive) {
-                            treino.descartar()
-                        }
-                    } else {
-                        Button("Nova caminhada") {
-                            treino.reiniciar()
-                        }
-                    }
+                    ResumoCaminhadaView(salvo: treino.estado == .salvo,inicio: treino.inicio,duracao: treino.tempoFormatado,passos: treino.passos,calorias: treino.calorias,bpmMedio: treino.bpmMedio,elevacaoMaxima: treino.altitudeInicial == nil || treino.erroAltitude != nil ? nil : treino.elevacaoMaxima,salvar: { Task { await treino.salvar() } }, descartar: { treino.descartar() },novaCaminhada: { treino.reiniciar() })
                 }
 
                 if treino.carregando {
@@ -124,6 +42,14 @@ struct CaminhadaView: View {
 
                 if let erroPassos = treino.erroPassos {
                     Text(erroPassos)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                if let erroAltitude = treino.erroAltitude,
+                   treino.estado == .resumo || treino.estado == .salvo {
+                    Text(erroAltitude)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
