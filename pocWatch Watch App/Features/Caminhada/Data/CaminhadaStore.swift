@@ -81,8 +81,16 @@ class CaminhadaStore: NSObject, ObservableObject {
             // Após a espera, só continua se esta ainda for a sessão atual.
             guard sessao === novaSessao else { return }
             estado = .caminhando
+            
+            #if targetEnvironment(simulator)
+            passos = 350
+            altitudeInicial = 760
+            altitudeAtual = 768
+            elevacaoMaxima = 8
+            #else
             iniciarPassos()
             registrarAltitude(inicial: true)
+            #endif
         } catch {
             tratarFalha(error)
         }
@@ -94,7 +102,13 @@ class CaminhadaStore: NSObject, ObservableObject {
         guard estado == .caminhando, !carregando else { return }
         carregando = true
         pedometro.stopUpdates()
+        #if targetEnvironment(simulator)
+        // Preserva a altitude fictícia para o resumo, sem consultar o sensor.
+        altitudeFinal = altitudeAtual
+        erroAltitude = nil
+        #else
         registrarAltitude(inicial: false)
+        #endif
         sessao?.end()
         
     }
@@ -113,7 +127,10 @@ class CaminhadaStore: NSObject, ObservableObject {
             atualizarMetricas()
             duracao = builder.elapsedTime(at: data)
             estado = .resumo
+            #if !targetEnvironment(simulator)
+            // No simulador, mantém os passos fictícios definidos ao iniciar.
             consultarPassosFinais(ate: data)
+            #endif
         } catch {
             tratarFalha(error)
         }
