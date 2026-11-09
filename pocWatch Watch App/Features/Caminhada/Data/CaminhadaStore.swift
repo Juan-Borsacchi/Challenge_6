@@ -3,363 +3,265 @@ import Combine
 import HealthKit
 import CoreMotion
 
-// Mantém o acesso ao estado do treino no MainActor, usado para atualizar a interface.
-@MainActor
-class CaminhadaStore: NSObject, ObservableObject {
-    enum Estado {
-        case pronto, caminhando, resumo, salvo
-    }
-    
-    @Published private(set) var estado: Estado = .pronto
-    @Published private(set) var carregando = false
-    @Published private(set) var bpm: Int?
-    @Published private(set) var bpmMedio: Int?
-    @Published private(set) var calorias: Double?
-    @Published private(set) var passos: Int?
-    @Published private(set) var erroPassos: String?
-    @Published private(set) var inicio = Date()
-    @Published private(set) var duracao: TimeInterval = 0
-    @Published private(set) var erro: String?
-    @Published private(set) var altitudeInicial: Double?
-    @Published private(set) var altitudeAtual: Double?
-    @Published private(set) var altitudeFinal: Double?
-    @Published private(set) var erroAltitude: String?
-    @Published private(set) var elevacaoMaxima: Double = 0
-    
+// Cuida apenas da sessão, dos sensores e dos resultados coletados.
+// Os estados da tela e o carregamento ficam na CaminhadaViewModel.
+class CaminhadaStore: NSObject, ObservableObject, HKWorkoutSessionDelegate, HKLiveWorkoutBuilderDelegate {
+    @Published private(set) var dados = DadosCaminhada()
+    private var caminhando = false
     private let healthStore = HKHealthStore()
     private let pedometro = CMPedometer()
+    private let altimetro = CMAltimeter()
     private var sessao: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
-    
-    private let altimetro = CMAltimeter()
     private var leituraAltitudeID: UUID?
-    
-    /// Converte a duração em segundos para um texto com minutos e segundos, como "03:25".
-    var tempoFormatado: String {
-        let segundos = Int(duracao)
-        return String(format: "%02d:%02d", segundos / 60, segundos % 60)
+
+    // Erros que a ViewModel pode apresentar na tela.
+    private enum Falha: LocalizedError {
+        case healthKitIndisponivel, permissaoNegada, encerramentoNaoConfirmado, salvamentoNaoConfirmado
+
+        var errorDescription: String? {
+            switch self {
+            case .healthKitIndisponivel:
+                return "HealthKit indisponível."
+            case .permissaoNegada:
+                return "Permita salvar treinos no Saúde para iniciar."
+            case .encerramentoNaoConfirmado:
+                return "O Saúde não confirmou o encerramento do treino."
+            case .salvamentoNaoConfirmado:
+                return "O Saúde não confirmou o salvamento."
+            }
+        }
     }
-    
-    /// Solicita as permissões do Saúde e inicia a sessão, a coleta de métricas e os sensores.
-    func iniciar() async {
-        guard estado == .pronto, !carregando else { return }
+
+    /// Solicita permissão e inicia uma caminhada interna.
+    func iniciar() async throws {
         guard HKHealthStore.isHealthDataAvailable() else {
-            erro = "HealthKit indisponível."
-            return
+            throw Falha.healthKitIndisponivel
         }
-        carregando = true
-        erro = nil
-        // Executa ao sair da função, inclusive se houver um erro ou um return antecipado.
-        defer { carregando = false }
+
+        try await healthStore.requestAuthorization(toShare: [HKObjectType.workoutType()],read: [HKQuantityType(.heartRate), HKQuantityType(.activeEnergyBurned)])
         
-        do {
-            try await healthStore.requestAuthorization(toShare: [HKObjectType.workoutType()],read: [HKQuantityType(.heartRate), HKQuantityType(.activeEnergyBurned)])
-            
-            guard healthStore.authorizationStatus(for: HKObjectType.workoutType()) == .sharingAuthorized else {
-                erro = "Permita salvar treinos no Saúde para iniciar."
-                return
-            }
-            
-            // A sessão configura os sensores para uma caminhada interna.
-            let configuracao = HKWorkoutConfiguration()
-            configuracao.activityType = .walking
-            configuracao.locationType = .indoor
-            
-            // A sessão controla o treino; o builder reúne as medições e permite salvá-lo.
-            let novaSessao = try HKWorkoutSession(healthStore: healthStore, configuration: configuracao)
-            let novoBuilder = novaSessao.associatedWorkoutBuilder()
-            sessao = novaSessao
-            builder = novoBuilder
-            // Esta própria CaminhadaStore receberá os avisos nos métodos da extensão abaixo.
-            novaSessao.delegate = self
-            novoBuilder.delegate = self
-            novoBuilder.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: configuracao)
-            
-            inicio = Date()
-            novaSessao.startActivity(with: inicio)
-            try await novoBuilder.beginCollection(at: inicio)
-            // Após a espera, só continua se esta ainda for a sessão atual.
-            guard sessao === novaSessao else { return }
-            estado = .caminhando
-            
-            #if targetEnvironment(simulator)
-            passos = 350
-            altitudeInicial = 760
-            altitudeAtual = 768
-            elevacaoMaxima = 8
-            #else
-            iniciarPassos()
-            registrarAltitude(inicial: true)
-            #endif
-        } catch {
-            tratarFalha(error)
+        guard healthStore.authorizationStatus(for: HKObjectType.workoutType()) == .sharingAuthorized else {
+            throw Falha.permissaoNegada
         }
+
+        let configuracao = HKWorkoutConfiguration()
+        configuracao.activityType = .walking
+        configuracao.locationType = .indoor
+
+        let novaSessao = try HKWorkoutSession(healthStore: healthStore, configuration: configuracao)
+        let novoBuilder = novaSessao.associatedWorkoutBuilder()
+        sessao = novaSessao
+        builder = novoBuilder
+        novaSessao.delegate = self
+        novoBuilder.delegate = self
+        novoBuilder.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: configuracao)
+
+        dados = DadosCaminhada()
+        novaSessao.startActivity(with: dados.inicio)
+
+        try await novoBuilder.beginCollection(at: dados.inicio)
+
+        // Se a sessão falhou durante a espera, não inicia os sensores.
+        guard sessao === novaSessao else { throw CancellationError() }
+        caminhando = true
+
+        iniciarPassos()
+        registrarAltitude(inicial: true)
     }
-    
-    /// Para a contagem de passos, solicita a altitude final e pede o encerramento da sessão.
-    /// O resumo será preparado quando o HealthKit confirmar o encerramento pelo delegate.
+
+    /// Para as leituras e solicita o encerramento ao HealthKit.
     func encerrar() {
-        guard estado == .caminhando, !carregando else { return }
-        carregando = true
+        guard caminhando else { return }
+        caminhando = false
         pedometro.stopUpdates()
-        #if targetEnvironment(simulator)
-        // Preserva a altitude fictícia para o resumo, sem consultar o sensor.
-        altitudeFinal = altitudeAtual
-        erroAltitude = nil
-        #else
+
         registrarAltitude(inicial: false)
-        #endif
-        sessao?.end()
-        
+
+        sessao?.end() //verifica se sessao possui um objeto, se nao tiver chama o metodo .end() do workout
     }
-    
-    /// Finaliza a coleta na data de encerramento e disponibiliza os resultados para o resumo.
-    /// A consulta dos passos finais é assíncrona e pode terminar depois que o resumo aparecer.
-    private func prepararResumo(em data: Date) async {
-        guard let builder else { return }
-        pedometro.stopUpdates()
-        carregando = true
-        defer { carregando = false }
-        do {
-            try await builder.endCollection(at: data)
-            // Ignora o resultado se o coletor do treino tiver sido substituído ou liberado.
-            guard self.builder === builder else { return }
-            atualizarMetricas()
-            duracao = builder.elapsedTime(at: data)
-            estado = .resumo
-            #if !targetEnvironment(simulator)
-            // No simulador, mantém os passos fictícios definidos ao iniciar.
-            consultarPassosFinais(ate: data)
-            #endif
-        } catch {
-            tratarFalha(error)
-        }
+
+    /// Salva o treino; se falhar, mantém a coleta disponível para tentar novamente.
+    func salvar() async throws {
+        guard let builder else { throw CancellationError() }
+        let treinoSalvo = try await builder.finishWorkout()
+        guard self.builder === builder else { throw CancellationError() }
+        guard treinoSalvo != nil else { throw Falha.salvamentoNaoConfirmado }
+        limparTreino(manterResultados: true)
     }
-    
-    /// Salva o treino no Saúde e, após a confirmação, libera a sessão mantendo o resumo.
-    /// Se o salvamento falhar, mantém o estado de resumo e informa o erro.
-    func salvar() async {
-        guard estado == .resumo, !carregando, let builder else { return }
-        carregando = true
-        erro = nil
-        defer { carregando = false }
-        do {
-            guard try await builder.finishWorkout() != nil else {
-                erro = "O Saúde não confirmou o salvamento."
-                return
-            }
-            liberarSessao()
-            estado = .salvo
-        } catch {
-            erro = "Não foi possível salvar: \(error.localizedDescription)"
-        }
-    }
-    
-    /// Descarta o treino ainda não salvo e limpa os dados para voltar à tela inicial.
+
+    /// Descarta a coleta e deixa os sensores prontos para outra caminhada.
     func descartar() {
-        guard estado == .resumo, !carregando else { return }
+        sessao?.delegate = nil
+        sessao?.end()
         builder?.discardWorkout()
-        reiniciar()
-    }
-    
-    /// Sai do resumo ou da confirmação de salvamento e prepara os dados para outro treino.
-    func reiniciar() {
-        guard estado == .resumo || estado == .salvo else { return }
         limparTreino()
     }
-    
-    /// Lê as estatísticas já reunidas pelo builder: BPM recente, BPM médio e calorias totais.
-    /// Atualiza as propriedades observadas pela tela; não inicia uma nova coleta de sensores.
+
+    /// Lê os batimentos e as calorias já reunidos pelo HealthKit.
     private func atualizarMetricas() {
         guard let builder else { return }
         let unidadeBPM = HKUnit.count().unitDivided(by: .minute())
         let batimentos = builder.statistics(for: HKQuantityType(.heartRate))
+
         if let valor = batimentos?.mostRecentQuantity()?.doubleValue(for: unidadeBPM) {
-            bpm = Int(valor.rounded())
+            dados.bpm = Int(valor.rounded())
         }
         if let media = batimentos?.averageQuantity()?.doubleValue(for: unidadeBPM) {
-            bpmMedio = Int(media.rounded())
+            dados.bpmMedio = Int(media.rounded())
         }
-        calorias = builder.statistics(for: HKQuantityType(.activeEnergyBurned))?
-            .sumQuantity()?.doubleValue(for: .kilocalorie())
+        dados.calorias = builder.statistics(for: HKQuantityType(.activeEnergyBurned))?.sumQuantity()?.doubleValue(for: .kilocalorie())
     }
-    
-    /// Acompanha o total de passos contado pelo pedômetro desde o início da caminhada.
+
+    /// Acompanha os passos desde o início da caminhada.
     private func iniciarPassos() {
         guard CMPedometer.isStepCountingAvailable() else {
-            erroPassos = "Contagem de passos indisponível neste dispositivo."
+            dados.erroPassos = "Contagem de passos indisponível neste dispositivo."
             return
         }
-        let inicioDaContagem = inicio
-        // weak self evita que a leitura mantenha esta store viva caso ela seja liberada.
-        pedometro.startUpdates(from: inicioDaContagem) { [weak self] dados, error in
-            Task { @MainActor in
-                // Só aceita a leitura se a store existir e o mesmo treino ainda estiver em andamento.
-                guard let self, self.inicio == inicioDaContagem,
-                      self.estado == .caminhando, !self.carregando else { return }
-                if let error {
-                    self.erroPassos = "Passos indisponíveis: \(error.localizedDescription)"
-                } else if let dados {
-                    // O pedômetro já retorna o total desde o início; não somamos novamente.
-                    self.passos = dados.numberOfSteps.intValue
-                    self.erroPassos = nil
-                }
+
+        let inicioDaContagem = dados.inicio
+        pedometro.startUpdates(from: inicioDaContagem) { dados, erro in
+            let passos = dados?.numberOfSteps.intValue
+            let mensagemErro = erro?.localizedDescription
+            OperationQueue.main.addOperation {
+                guard self.dados.inicio == inicioDaContagem, self.caminhando else { return }
+                self.atualizarPassos(passos, erro: mensagemErro)
             }
         }
     }
-    
-    /// Consulta os passos entre o início e o fim do treino para atualizar o total do resumo.
+
+    /// Confere o total de passos entre o início e o encerramento.
     private func consultarPassosFinais(ate fim: Date) {
         guard CMPedometer.isStepCountingAvailable() else { return }
-        let inicioDaContagem = inicio
-        // Consulta apenas o intervalo do treino, sem incluir passos após o encerramento.
-        pedometro.queryPedometerData(from: inicioDaContagem, to: fim) { [weak self] dados, error in
-            Task { @MainActor in
-                guard let self, self.inicio == inicioDaContagem,
-                      self.estado == .resumo || self.estado == .salvo else { return }
-                if let error {
-                    self.erroPassos = "Passos indisponíveis: \(error.localizedDescription)"
-                } else if let dados {
-                    self.passos = dados.numberOfSteps.intValue
-                    self.erroPassos = nil
-                }
+        let inicioDaContagem = dados.inicio
+
+        pedometro.queryPedometerData(from: inicioDaContagem, to: fim) { dados, erro in
+            let passos = dados?.numberOfSteps.intValue
+            let mensagemErro = erro?.localizedDescription
+            OperationQueue.main.addOperation {
+                guard self.dados.inicio == inicioDaContagem, !self.caminhando else { return }
+                self.atualizarPassos(passos, erro: mensagemErro)
             }
         }
     }
-    
-    /// Com inicial = true, guarda a primeira altitude e continua acompanhando a elevação máxima.
-    /// Com inicial = false, aguarda uma leitura para guardar a altitude final e para o altímetro.
+
+    private func atualizarPassos(_ passos: Int?, erro: String?) {
+        if let erro {
+            dados.erroPassos = "Passos indisponíveis: \(erro)"
+        } else if let passos {
+            dados.passos = passos
+            dados.erroPassos = nil
+        }
+    }
+
+    /// Guarda o ponto inicial e acompanha a subida, ou faz a última leitura.
     private func registrarAltitude(inicial: Bool) {
-        // Interrompe a leitura anterior e invalida os resultados que ainda possam estar a caminho.
         altimetro.stopAbsoluteAltitudeUpdates()
         leituraAltitudeID = nil
-        erroAltitude = nil
-        
-        // Confere se o dispositivo oferece medição de altitude absoluta.
+        dados.erroAltitude = nil
+
         guard CMAltimeter.isAbsoluteAltitudeAvailable() else {
-            erroAltitude = "Não foi possível iniciar o altímetro"
+            dados.erroAltitude = "Não foi possível iniciar o altímetro"
             return
         }
-        
-        // Cada pedido tem um identificador para distinguir suas respostas das leituras anteriores.
+
+        // O identificador permite ignorar respostas de uma leitura que já foi cancelada.
         let pedidoID = UUID()
         leituraAltitudeID = pedidoID
-        
-        altimetro.startAbsoluteAltitudeUpdates(to: .main) { [weak self] dados, erro in
+
+        altimetro.startAbsoluteAltitudeUpdates(to: .main) { dados, erro in
             let altitude = dados?.altitude
             let mensagemErro = erro?.localizedDescription
-            
-            Task { @MainActor in
-                
-                // Ignora respostas de um pedido que já foi cancelado ou substituído.
-                guard let self, self.leituraAltitudeID == pedidoID else { return }
-                
-                if let mensagemErro {
-                    self.altimetro.stopAbsoluteAltitudeUpdates()
-                    self.leituraAltitudeID = nil
-                    self.erroAltitude = mensagemErro
-                    return
-                }
-                
-                guard let altitude else { return }
-                
-                if !inicial {
-                    self.altimetro.stopAbsoluteAltitudeUpdates()
-                    self.leituraAltitudeID = nil
-                }
-                
-                if inicial {
-                    // Guarda o ponto de partida somente na primeira leitura.
-                    if self.altitudeInicial == nil {
-                        self.altitudeInicial = altitude
-                    }
-                } else {
-                    self.altitudeFinal = altitude
-                }
 
-                // Guarda a maior altura acima do ponto inicial, em metros; não soma todas as subidas.
-                if let pontoInicial = self.altitudeInicial {
-                    let elevacao = altitude - pontoInicial
+            guard self.leituraAltitudeID == pedidoID else { return }
+            if let mensagemErro {
+                self.altimetro.stopAbsoluteAltitudeUpdates()
+                self.leituraAltitudeID = nil
+                self.dados.erroAltitude = mensagemErro
+                return
+            }
+            guard let altitude else { return }
 
-                    self.elevacaoMaxima = max(self.elevacaoMaxima, elevacao)
-                }
+            self.dados.altitudeAtual = altitude
+            if !inicial {
+                self.dados.altitudeFinal = altitude
+                self.altimetro.stopAbsoluteAltitudeUpdates()
+                self.leituraAltitudeID = nil
+            } else if self.dados.altitudeInicial == nil {
+                self.dados.altitudeInicial = altitude
+            }
+
+            if let pontoInicial = self.dados.altitudeInicial {
+                self.dados.elevacaoMaxima = max(self.dados.elevacaoMaxima, altitude - pontoInicial)
             }
         }
     }
-    
-    /// Para o pedômetro e remove os delegates e as referências à sessão e ao builder.
-    /// Preserva as métricas para que continuem visíveis após salvar o treino.
-    private func liberarSessao() {
+
+    /// Libera os recursos. Após salvar, preserva os resultados do resumo.
+    private func limparTreino(manterResultados: Bool = false) {
+        caminhando = false
         pedometro.stopUpdates()
         sessao?.delegate = nil
         builder?.delegate = nil
         sessao = nil
         builder = nil
-    }
-    
-    /// Libera a sessão, para o altímetro e redefine os resultados para iniciar outro treino.
-    private func limparTreino() {
-        liberarSessao()
-        bpm = nil
-        bpmMedio = nil
-        calorias = nil
-        passos = nil
-        erroPassos = nil
-        duracao = 0
-        erro = nil
-        estado = .pronto
-        
-        leituraAltitudeID = nil
-        altimetro.stopAbsoluteAltitudeUpdates()
-        
-        altitudeInicial = nil
-        altitudeFinal = nil
-        erroAltitude = nil
-        elevacaoMaxima = 0
-    }
-    
-    /// Interrompe a sessão, descarta a coleta e volta ao estado inicial com uma mensagem de erro.
-    private func tratarFalha(_ error: Error) {
-        sessao?.delegate = nil
-        sessao?.end()
-        builder?.discardWorkout()
-        limparTreino()
-        carregando = false
-        erro = "O treino foi interrompido: \(error.localizedDescription)"
-    }
-}
 
-// Esta extensão reúne os métodos que o HealthKit chama para avisar sobre o treino.
-// nonisolated permite receber esses avisos fora do MainActor. Cada Task passa o tratamento
-// para o MainActor antes de acessar o estado da store. As comparações com === verificam
-// se o aviso pertence ao mesmo objeto de sessão ou builder usado no treino atual.
-extension CaminhadaStore: HKWorkoutSessionDelegate, HKLiveWorkoutBuilderDelegate {
-    /// Recebe mudanças no estado da sessão e prepara o resumo quando ela termina.
-    nonisolated func workoutSession(_ workoutSession: HKWorkoutSession, didChangeTo toState: HKWorkoutSessionState, from fromState: HKWorkoutSessionState, date: Date) {
-        Task { @MainActor in
-            guard self.sessao === workoutSession else { return }
-            if toState == .ended {
-                await self.prepararResumo(em: date)
+        if manterResultados { return }
+
+        altimetro.stopAbsoluteAltitudeUpdates()
+        leituraAltitudeID = nil
+        dados = DadosCaminhada()
+    }
+
+    private func tratarFalha(_ erro: Error) {
+        descartar()
+        dados.erro = "O treino foi interrompido: \(erro.localizedDescription)"
+    }
+
+    /// Finaliza os resultados depois que o HealthKit confirma o encerramento.
+    private func finalizarColeta(da sessaoEncerrada: HKWorkoutSession, em data: Date) {
+        guard sessao === sessaoEncerrada, let builder else { return }
+        caminhando = false
+        pedometro.stopUpdates()
+
+        builder.endCollection(withEnd: data) { sucesso, erro in
+            OperationQueue.main.addOperation {
+                guard self.builder === builder else { return }
+                guard sucesso else {
+                    self.tratarFalha(erro ?? Falha.encerramentoNaoConfirmado)
+                    return
+                }
+
+                self.atualizarMetricas()
+                self.dados.duracao = builder.elapsedTime(at: data)
+                self.dados.terminou = true
+                self.consultarPassosFinais(ate: data)
             }
         }
     }
-    
-    /// Recebe uma falha da sessão atual e aciona a limpeza do treino e a exibição do erro.
-    nonisolated func workoutSession(_ workoutSession: HKWorkoutSession, didFailWithError error: Error) {
-        Task { @MainActor in
+
+    // Os retornos do HealthKit chegam em segundo plano. A tela observa os dados na fila principal.
+    func workoutSession(_ workoutSession: HKWorkoutSession, didChangeTo toState: HKWorkoutSessionState, from fromState: HKWorkoutSessionState, date: Date) {
+        guard toState == .ended else { return }
+        OperationQueue.main.addOperation {
+            self.finalizarColeta(da: workoutSession, em: date)
+        }
+    }
+
+    func workoutSession(_ workoutSession: HKWorkoutSession, didFailWithError error: Error) {
+        OperationQueue.main.addOperation {
             guard self.sessao === workoutSession else { return }
             self.tratarFalha(error)
         }
     }
-    
-    /// Recebe o aviso de novas medições e atualiza os batimentos e as calorias exibidos na tela.
-    nonisolated func workoutBuilder(_ workoutBuilder: HKLiveWorkoutBuilder, didCollectDataOf collectedTypes: Set<HKSampleType>) {
-        Task { @MainActor in
+
+    func workoutBuilder(_ workoutBuilder: HKLiveWorkoutBuilder, didCollectDataOf collectedTypes: Set<HKSampleType>) {
+        OperationQueue.main.addOperation {
             guard self.builder === workoutBuilder else { return }
             self.atualizarMetricas()
         }
     }
-    
-    /// Exigido pelo protocolo para avisos de eventos, como pausas. Este app não os trata aqui.
-    nonisolated func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) { }
+
+    func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) { }
 }

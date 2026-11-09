@@ -1,54 +1,72 @@
 import SwiftUI
 
 struct CaminhadaView: View {
-    @StateObject private var treino = CaminhadaStore()
+    @StateObject private var viewModel = CaminhadaViewModel()
 
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                if treino.estado == .pronto {
+                if viewModel.estado == .pronto {
                     Label("Caminhada", systemImage: "figure.walk")
                         .foregroundStyle(.green)
                 }
 
-                switch treino.estado {
+                switch viewModel.estado {
                 case .pronto:
-                    Text("Acompanhe seus batimentos e passos durante uma caminhada interna.")
+                    Text("Acompanhe seus passos e batimentos.")
                         .font(.caption)
                         .multilineTextAlignment(.center)
 
                     Button("Iniciar") {
-                        Task { await treino.iniciar() }
+                        Task { await viewModel.iniciar() }
                     }
                     .tint(.green)
 
                 case .caminhando:
-                    CaminhandoView(inicio: treino.inicio,bpm: treino.bpm,passos: treino.passos,calorias: treino.calorias,elevacaoMaxima: treino.altitudeInicial == nil || treino.erroAltitude != nil ? nil : treino.elevacaoMaxima,encerrar: { treino.encerrar() })
+                    CaminhandoView(
+                        inicio: viewModel.dados.inicio,
+                        bpm: viewModel.dados.bpm,
+                        passos: viewModel.dados.passos,
+                        calorias: viewModel.dados.calorias,
+                        elevacaoMaxima: viewModel.elevacaoMaxima,
+                        encerrar: { viewModel.encerrar() }
+                    )
 
                 case .resumo, .salvo:
-                    ResumoCaminhadaView(salvo: treino.estado == .salvo,inicio: treino.inicio,duracao: treino.tempoFormatado,passos: treino.passos,calorias: treino.calorias,bpmMedio: treino.bpmMedio,elevacaoMaxima: treino.altitudeInicial == nil || treino.erroAltitude != nil ? nil : treino.elevacaoMaxima,salvar: { Task { await treino.salvar() } }, descartar: { treino.descartar() },novaCaminhada: { treino.reiniciar() })
+                    ResumoCaminhadaView(
+                        salvo: viewModel.estado == .salvo,
+                        inicio: viewModel.dados.inicio,
+                        duracao: viewModel.tempoFormatado,
+                        passos: viewModel.dados.passos,
+                        calorias: viewModel.dados.calorias,
+                        bpmMedio: viewModel.dados.bpmMedio,
+                        elevacaoMaxima: viewModel.elevacaoMaxima,
+                        salvar: { Task { await viewModel.salvar() } },
+                        descartar: { viewModel.descartar() },
+                        novaCaminhada: { viewModel.reiniciar() }
+                    )
                 }
 
-                if treino.carregando {
+                if viewModel.carregando {
                     ProgressView()
                 }
 
-                if let erro = treino.erro {
+                if let erro = viewModel.erro {
                     Text(erro)
                         .font(.caption2)
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                 }
 
-                if let erroPassos = treino.erroPassos {
+                if let erroPassos = viewModel.dados.erroPassos {
                     Text(erroPassos)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
 
-                if let erroAltitude = treino.erroAltitude,
-                   treino.estado == .resumo || treino.estado == .salvo {
+                if let erroAltitude = viewModel.dados.erroAltitude,
+                   viewModel.estado == .resumo || viewModel.estado == .salvo {
                     Text(erroAltitude)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -56,7 +74,7 @@ struct CaminhadaView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(treino.carregando)
+            .disabled(viewModel.carregando)
             .padding()
         }
     }

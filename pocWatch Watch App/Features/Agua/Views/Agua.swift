@@ -13,7 +13,6 @@ struct Agua: View {
     @State var healthStore = HKHealthStore()
     @State private var aguaConsumida: Double = 0
     @State private var registrando = false
-    @State private var registrou = false
     
     private let totalCopos = 8
 
@@ -28,13 +27,13 @@ struct Agua: View {
     }
     
     var body: some View {
-        VStack (spacing: 12){
+        VStack(spacing: 12) {
             ZStack {
                 ForEach(0..<totalCopos, id: \.self) { indice in
                     Circle()
                         .trim(from: CGFloat(indice) / CGFloat(totalCopos) + 0.015,
                               to: CGFloat(indice + 1) / CGFloat(totalCopos) - 0.015)
-                        .stroke(indice < coposRegistrados ? Color.blue : Color.gray.opacity(0.2),
+                        .stroke(indice < coposRegistrados ? Color.blue : Color.blue.opacity(0.2),
                                 style: StrokeStyle(lineWidth: 8, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                         .animation(.easeInOut(duration: 0.35), value: coposRegistrados)
@@ -44,47 +43,77 @@ struct Agua: View {
                 Button {
                     Task {
                         await registrar()
-                        registrou = true
                     }
                 } label: {
-                    if registrou {
-                        VStack{
-                            Image(systemName: "drop.halffull")
-                                .font(.title2)
-                            Text("\(aguaConsumida.formatted())")
-                                .font(.title3)
-                                .fontWeight(.bold)
-                            Text("\(metaDiaria.formatted()) ml")
-                                .font(.caption2)
+                    VStack(spacing: 4) {
+                        if registrando {
+                            ProgressView()
+                                .tint(.blue)
+                                .frame(height: 22)
+                        } else {
+                            Image(systemName: "drop.fill")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(.blue)
+                                .frame(height: 22)
                         }
-                        .frame(width: 90, height: 90)
-                        .contentShape(Circle())
-                    } else {
-                        VStack(spacing: 4) {
-                            Image(systemName: "drop.halffull")
-                                .font(.title2)
-                            Text("Registrar água")
+
+                        if aguaConsumida > 0 {
+                            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                                Text(aguaConsumida.formatted(.number.precision(.fractionLength(0))))
+                                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                                    .monospacedDigit()
+                                    .contentTransition(.numericText())
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+
+                                Text("mL")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Text("\((metaDiaria).formatted()) ml")
                                 .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        } else {
+                            Text("Registrar\nágua")
+                                .font(.system(.footnote, design: .rounded, weight: .semibold))
                                 .multilineTextAlignment(.center)
                         }
-                        .frame(width: 90, height: 90)
-                        .contentShape(Circle())
                     }
+                    .foregroundStyle(.primary)
+                    .padding(8)
+                    .frame(width: 112, height: 112)
+                    .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular, in: Circle())
+                .glassEffect(.regular.tint(.blue.opacity(0.15)), in: Circle())
+                .overlay {
+                    Circle()
+                        .strokeBorder(.blue.opacity(0.3), lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+                .animation(.easeInOut(duration: 0.25), value: aguaConsumida)
                 .disabled(registrando)
                 
             }
-            .frame(width: 120, height: 120)
-            
+            .frame(width: 140, height: 140)
+
+            if registrando {
+                Text("Registrando…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Label("250 mL por toque", systemImage: "plus.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.blue)
+            }
         }
         .padding()
         
     }
     
-    
-    @MainActor
     private func registrar() async {
         guard !registrando else { return }
         guard HKHealthStore.isHealthDataAvailable() else {
