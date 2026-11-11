@@ -78,7 +78,7 @@ class CaminhadaStore: NSObject, ObservableObject, HKWorkoutSessionDelegate, HKLi
 
         registrarAltitude(inicial: false)
 
-        sessao?.end() //verifica se sessao possui um objeto, se nao tiver chama o metodo .end() do workout
+        sessao?.end() //verifica se sessao possui um objeto, se tiver chama o metodo .end() do workout
     }
 
     /// Salva o treino; se falhar, mantém a coleta disponível para tentar novamente.
@@ -165,7 +165,7 @@ class CaminhadaStore: NSObject, ObservableObject, HKWorkoutSessionDelegate, HKLi
             dados.erroAltitude = "Não foi possível iniciar o altímetro"
             return
         }
-
+ 
         // O identificador permite ignorar respostas de uma leitura que já foi cancelada.
         let pedidoID = UUID()
         leituraAltitudeID = pedidoID
